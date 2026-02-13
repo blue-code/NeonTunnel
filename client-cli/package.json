@@ -1,0 +1,11 @@
+{
+  "name": "neon-tunnel-client",
+  "version": "1.0.0",
+  "bin": {
+    "neon-tunnel": "./index.js"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.7.4",
+    "yargs": "^17.7.2"
+  }
+}
