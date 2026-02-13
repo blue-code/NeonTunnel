@@ -102,4 +102,4 @@ NeonTunnel은 멀티 세션을 지원하므로, 단순히 **새로운 터미널 
 ---
 
 ## 📝 라이선스
-MIT License - **Created for 병호오빠 💕 by Tiffany**
+MIT License - **Created for BH 💕 by Tiffany**
