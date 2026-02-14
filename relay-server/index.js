@@ -125,12 +125,9 @@ io.on("connection", (socket) => {
         
         tunnels[socket.id] = { publicPort, tcpServer };
         
-        // Send Public URL to Client
-        // Note: Client CLI log showed "http://relay-server:37803", meaning publicHost var was hardcoded.
-        // Let's try to be generic or let user know.
+        // Send just the port, let client construct the URL
         socket.emit("tunnel-created", { 
-          url: `http://YOUR_SERVER_IP:${publicPort}`,
-          rawUrl: `YOUR_SERVER_IP:${publicPort}`,
+          publicPort: publicPort,
           tunnelId: socket.id 
         });
       });
