@@ -61,89 +61,87 @@ io.on("connection", (socket) => {
   socket.on("register-tunnel", async (requestedPort) => {
     let publicPort;
     
-    // Convert to int if string, and validate
-    let reqPortInt = requestedPort ? parseInt(requestedPort) : null;
-    if (isNaN(reqPortInt)) reqPortInt = null;
-
-    logger.info(`[Request] Client ${socket.id} requesting port: ${reqPortInt || 'Auto'}`);
-
-    if (reqPortInt) {
-      if (reqPortInt < MIN_PORT || reqPortInt > MAX_PORT) {
-        logger.warn(`Client ${socket.id} requested invalid port range: ${reqPortInt}`);
-        return socket.emit("tunnel-failed", { message: `Requested port ${reqPortInt} is out of allowed range (${MIN_PORT}-${MAX_PORT})` });
-      }
-      
-      if (await isPortFree(reqPortInt)) {
-        publicPort = reqPortInt;
-      } else {
-        logger.warn(`Client ${socket.id} requested busy port: ${reqPortInt}`);
-        return socket.emit("tunnel-failed", { message: `Requested port ${reqPortInt} is already in use` });
-      }
-    } else {
-      try {
-        publicPort = await getFreePort();
-      } catch (e) {
-        return socket.emit("tunnel-failed", { message: "No free ports available on server" });
-      }
-    }
+    // Explicitly parse and validate
+    const reqPortInt = requestedPort ? parseInt(requestedPort) : null;
     
-    // Create TCP Server for this tunnel
-    const tcpServer = net.createServer((userSocket) => {
-      const connId = uuidv4();
-      
-      // Notify Client of new connection
-      socket.emit("tcp-connection", { connId });
-
-      // Forward User -> Client
-      userSocket.on("data", (data) => {
-        socket.emit(`tcp-data-${connId}`, data);
-      });
-
-      // Handle Client -> User (via WS)
-      const dataHandler = ({ connId: id, data }) => {
-        if (id === connId && !userSocket.destroyed) userSocket.write(data);
-      };
-      
-      const closeHandler = ({ connId: id }) => {
-        if (id === connId) userSocket.end();
-      };
-
-      socket.on("tcp-data", dataHandler);
-      socket.on("tcp-close", closeHandler);
-
-      userSocket.on("close", () => {
-        socket.emit(`tcp-close-${connId}`);
-        socket.off("tcp-data", dataHandler);
-        socket.off("tcp-close", closeHandler);
-      });
-
-      userSocket.on("error", () => userSocket.end());
-    });
+    logger.info(`[REQUEST] Client ${socket.id} requested port: ${requestedPort} (Parsed: ${reqPortInt})`);
 
     try {
+      if (reqPortInt && !isNaN(reqPortInt)) {
+        // CASE 1: Requested specific port
+        if (reqPortInt < MIN_PORT || reqPortInt > MAX_PORT) {
+          logger.warn(`[FAIL] Port ${reqPortInt} out of range (${MIN_PORT}-${MAX_PORT})`);
+          return socket.emit("tunnel-failed", { message: `Requested port ${reqPortInt} is out of allowed range (${MIN_PORT}-${MAX_PORT})` });
+        }
+        
+        if (await isPortFree(reqPortInt)) {
+          publicPort = reqPortInt;
+          logger.info(`[SUCCESS] Port ${publicPort} is available.`);
+        } else {
+          logger.warn(`[FAIL] Port ${reqPortInt} is busy`);
+          return socket.emit("tunnel-failed", { message: `Requested port ${reqPortInt} is already in use` });
+        }
+      } else {
+        // CASE 2: Auto allocation
+        logger.info(`[AUTO] Assigning random port...`);
+        publicPort = await getFreePort();
+      }
+      
+      // Create TCP Server for this tunnel
+      const tcpServer = net.createServer((userSocket) => {
+        const connId = uuidv4();
+        
+        // Notify Client of new connection
+        socket.emit("tcp-connection", { connId });
+
+        // Forward User -> Client
+        userSocket.on("data", (data) => {
+          socket.emit(`tcp-data-${connId}`, data);
+        });
+
+        // Handle Client -> User (via WS)
+        const dataHandler = ({ connId: id, data }) => {
+          if (id === connId && !userSocket.destroyed) userSocket.write(data);
+        };
+        
+        const closeHandler = ({ connId: id }) => {
+          if (id === connId) userSocket.end();
+        };
+
+        socket.on("tcp-data", dataHandler);
+        socket.on("tcp-close", closeHandler);
+
+        userSocket.on("close", () => {
+          socket.emit(`tcp-close-${connId}`);
+          socket.off("tcp-data", dataHandler);
+          socket.off("tcp-close", closeHandler);
+        });
+
+        userSocket.on("error", () => userSocket.end());
+      });
+
       tcpServer.listen(publicPort, () => {
-        logger.info(`Tunnel created: :${publicPort} -> Client ${socket.id}`);
+        logger.info(`[TUNNEL START] :${publicPort} -> Client ${socket.id}`);
         
         tunnels[socket.id] = { publicPort, tcpServer };
         
         // Send Public URL to Client
-        // In prod, this should be the server IP/domain
-        // We can't know the public IP easily here without config, so we send port.
-        const publicHost = "relay-server"; 
+        // Note: Client CLI log showed "http://relay-server:37803", meaning publicHost var was hardcoded.
+        // Let's try to be generic or let user know.
         socket.emit("tunnel-created", { 
-          url: `http://${publicHost}:${publicPort}`,
-          rawUrl: `${publicHost}:${publicPort}`,
+          url: `http://YOUR_SERVER_IP:${publicPort}`,
+          rawUrl: `YOUR_SERVER_IP:${publicPort}`,
           tunnelId: socket.id 
         });
       });
       
       tcpServer.on('error', (err) => {
-         logger.error(`Failed to bind port ${publicPort}: ${err.message}`);
+         logger.error(`[TCP ERROR] Failed to bind port ${publicPort}: ${err.message}`);
          socket.emit("tunnel-failed", { message: `Failed to bind port ${publicPort}` });
       });
 
     } catch (err) {
-       logger.error(`Server listen error: ${err.message}`);
+       logger.error(`[INTERNAL ERROR] ${err.message}`);
        socket.emit("tunnel-failed", { message: "Internal Server Error" });
     }
   });
