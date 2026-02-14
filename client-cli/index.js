@@ -39,12 +39,8 @@ const socket = io(RELAY_SERVER);
 
 socket.on("connect", () => {
   console.log("✅ Connected to Relay Server");
-  // Check if REQUESTED_PORT is defined and pass it, otherwise pass nothing
-  if (REQUESTED_PORT) {
-    socket.emit("register-tunnel", REQUESTED_PORT); 
-  } else {
-    socket.emit("register-tunnel");
-  }
+  console.log(`[Debug] Sending register-tunnel with port: ${REQUESTED_PORT || 'Auto'}`);
+  socket.emit("register-tunnel", REQUESTED_PORT);
 });
 
 socket.on("tunnel-created", ({ url, tunnelId }) => {
