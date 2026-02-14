@@ -12,6 +12,12 @@ const argv = yargs(hideBin(process.argv))
     description: "Local port to expose",
     demandOption: true,
   })
+  .option("local-host", {
+    alias: "l",
+    type: "string",
+    description: "Local host address (default: 127.0.0.1)",
+    default: "127.0.0.1",
+  })
   .option("server", {
     alias: "s",
     type: "string",
@@ -26,12 +32,13 @@ const argv = yargs(hideBin(process.argv))
   .argv;
 
 const LOCAL_PORT = argv.port;
+const LOCAL_HOST = argv.localHost;
 const RELAY_SERVER = argv.server;
 // Support both camelCase and kebab-case access just in case
 const REQUESTED_PORT = argv.remotePort || argv['remote-port'];
 
 console.log(`\n=== NeonTunnel Client ===`);
-console.log(`Target: localhost:${LOCAL_PORT}`);
+console.log(`Target: ${LOCAL_HOST}:${LOCAL_PORT}`);
 console.log(`Relay : ${RELAY_SERVER}`);
 if (REQUESTED_PORT) console.log(`Request Public Port: ${REQUESTED_PORT}`);
 console.log(`=========================\n`);
@@ -78,7 +85,7 @@ socket.on("tcp-connection", ({ connId }) => {
   // New connection from outside to the Relay
   const local = new net.Socket();
   
-  local.connect(LOCAL_PORT, "127.0.0.1", () => {
+  local.connect(LOCAL_PORT, LOCAL_HOST, () => {
     // console.log(`[CONN] New connection ${connId} -> Local:${LOCAL_PORT}`);
   });
 
