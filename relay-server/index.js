@@ -31,23 +31,55 @@ const io = new Server(httpServer, {
 // Active Tunnels: { socketId: { publicPort, tcpServer } }
 const tunnels = {};
 
+// Helper: Check if port is free
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', (err) => resolve(false));
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port);
+  });
+}
+
 // Helper: Find free port
 function getFreePort() {
-  return new Promise((resolve, reject) => {
-    const port = Math.floor(Math.random() * (MAX_PORT - MIN_PORT + 1)) + MIN_PORT;
-    const server = net.createServer();
-    server.listen(port, () => {
-      server.close(() => resolve(port));
-    });
-    server.on('error', () => resolve(getFreePort())); // Retry
+  return new Promise(async (resolve, reject) => {
+    // Try random ports
+    for (let i = 0; i < 100; i++) {
+      const port = Math.floor(Math.random() * (MAX_PORT - MIN_PORT + 1)) + MIN_PORT;
+      if (await isPortFree(port)) return resolve(port);
+    }
+    reject("No free ports available");
   });
 }
 
 io.on("connection", (socket) => {
   logger.info(`Client connected: ${socket.id}`);
 
-  socket.on("register-tunnel", async () => {
-    const publicPort = await getFreePort();
+  socket.on("register-tunnel", async (requestedPort) => {
+    let publicPort;
+
+    if (requestedPort) {
+      // Validate requested port
+      const port = parseInt(requestedPort);
+      if (isNaN(port) || port < MIN_PORT || port > MAX_PORT) {
+        return socket.emit("tunnel-failed", { message: `Requested port ${port} is out of allowed range (${MIN_PORT}-${MAX_PORT})` });
+      }
+      
+      if (await isPortFree(port)) {
+        publicPort = port;
+      } else {
+        return socket.emit("tunnel-failed", { message: `Requested port ${port} is already in use` });
+      }
+    } else {
+      try {
+        publicPort = await getFreePort();
+      } catch (e) {
+        return socket.emit("tunnel-failed", { message: "No free ports available on server" });
+      }
+    }
     
     // Create TCP Server for this tunnel
     const tcpServer = net.createServer((userSocket) => {
@@ -88,11 +120,10 @@ io.on("connection", (socket) => {
       tunnels[socket.id] = { publicPort, tcpServer };
       
       // Send Public URL to Client
-      // In prod, replace 'localhost' with actual Public IP or Domain
-      const publicHost = "localhost"; 
+      const publicHost = "localhost"; // Ideally dynamic
       socket.emit("tunnel-created", { 
-        url: `http://${publicHost}:${publicPort}`, // For HTTP
-        rawUrl: `${publicHost}:${publicPort}`,     // For TCP
+        url: `http://${publicHost}:${publicPort}`,
+        rawUrl: `${publicHost}:${publicPort}`,
         tunnelId: socket.id 
       });
     });

@@ -18,21 +18,28 @@ const argv = yargs(hideBin(process.argv))
     description: "Relay server URL",
     default: "http://localhost:3000",
   })
+  .option("remote-port", {
+    alias: "r",
+    type: "number",
+    description: "Specific public port to request on Relay",
+  })
   .argv;
 
 const LOCAL_PORT = argv.port;
 const RELAY_SERVER = argv.server;
+const REQUESTED_PORT = argv.remotePort; // Optional
 
 console.log(`\n=== NeonTunnel Client ===`);
 console.log(`Target: localhost:${LOCAL_PORT}`);
 console.log(`Relay : ${RELAY_SERVER}`);
+if (REQUESTED_PORT) console.log(`Request Public Port: ${REQUESTED_PORT}`);
 console.log(`=========================\n`);
 
 const socket = io(RELAY_SERVER);
 
 socket.on("connect", () => {
   console.log("✅ Connected to Relay Server");
-  socket.emit("register-tunnel"); // Request a new tunnel
+  socket.emit("register-tunnel", REQUESTED_PORT); // Send requested port
 });
 
 socket.on("tunnel-created", ({ url, tunnelId }) => {
@@ -41,38 +48,15 @@ socket.on("tunnel-created", ({ url, tunnelId }) => {
   console.log(`🔑 Tunnel ID : ${tunnelId}\n`);
 });
 
-// Handle incoming requests from Relay
-socket.on("request", ({ id, method, url, headers, body }) => {
-  // console.log(`[REQ] ${method} ${url}`);
-
-  // Forward to Local Server
-  const localClient = net.connect(LOCAL_PORT, "127.0.0.1", () => {
-    // Construct simplified HTTP request (naïve implementation)
-    // In a robust version, we should use a proper HTTP proxy agent or stream piping
-    // For TCP tunneling (which is what ngrok does for arbitrary protocols), we need stream piping.
-    // However, outray/ngrok http mode parses HTTP.
-    
-    // Let's implement TCP tunneling mode for simplicity and robustness first.
-    // Wait... the relay sends "request" event? That implies HTTP parsing.
-    // Let's switch to pure TCP streaming for better compatibility.
-  });
-  
-  // Re-thinking: Pure TCP Tunnel is better.
-  // 1. Relay listens on a public port (or subdomains).
-  // 2. Client connects to Relay via WebSocket.
-  // 3. When User connects to Relay Public Port -> Relay streams data over WS -> Client -> Local Port.
+socket.on("tunnel-failed", ({ message }) => {
+  console.error(`\n❌ Tunnel Creation Failed: ${message}`);
+  process.exit(1);
 });
 
-// --- TCP Stream Implementation ---
-// Re-implementing with TCP Stream logic for robust tunneling
-
+// ... (TCP Stream Implementation remains same)
 socket.on("tcp-connection", ({ connId }) => {
-  // New connection from outside to the Relay
   const local = new net.Socket();
-  
-  local.connect(LOCAL_PORT, "127.0.0.1", () => {
-    // console.log(`[CONN] New connection ${connId} -> Local:${LOCAL_PORT}`);
-  });
+  local.connect(LOCAL_PORT, "127.0.0.1", () => {});
 
   local.on("data", (data) => {
     socket.emit("tcp-data", { connId, data });
@@ -83,11 +67,9 @@ socket.on("tcp-connection", ({ connId }) => {
   });
 
   local.on("error", (err) => {
-    // console.error(`[ERR] Local connection error: ${err.message}`);
     socket.emit("tcp-close", { connId });
   });
 
-  // Receive data from Relay for this connection
   socket.on(`tcp-data-${connId}`, (data) => {
     if (!local.destroyed) local.write(data);
   });
