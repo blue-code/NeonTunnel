@@ -15,8 +15,8 @@ const logger = winston.createLogger({
 });
 
 const HTTP_PORT = process.env.PORT || 3000;
-const MIN_PORT = 10000;
-const MAX_PORT = 20000;
+const MIN_PORT = 33000;
+const MAX_PORT = 39000;
 
 const httpServer = http.createServer((req, res) => {
   res.writeHead(200);
