@@ -60,17 +60,22 @@ io.on("connection", (socket) => {
 
   socket.on("register-tunnel", async (requestedPort) => {
     let publicPort;
+    
+    // Explicitly log the received port for debugging
+    // logger.info(`[Debug] Request from ${socket.id}, requestedPort: ${requestedPort} (type: ${typeof requestedPort})`);
 
-    if (requestedPort) {
-      // Validate requested port
+    if (requestedPort && requestedPort !== null) {
       const port = parseInt(requestedPort);
+      
       if (isNaN(port) || port < MIN_PORT || port > MAX_PORT) {
+        logger.warn(`Client ${socket.id} requested invalid port: ${port}`);
         return socket.emit("tunnel-failed", { message: `Requested port ${port} is out of allowed range (${MIN_PORT}-${MAX_PORT})` });
       }
       
       if (await isPortFree(port)) {
         publicPort = port;
       } else {
+        logger.warn(`Client ${socket.id} requested busy port: ${port}`);
         return socket.emit("tunnel-failed", { message: `Requested port ${port} is already in use` });
       }
     } else {
@@ -85,15 +90,12 @@ io.on("connection", (socket) => {
     const tcpServer = net.createServer((userSocket) => {
       const connId = uuidv4();
       
-      // Notify Client of new connection
       socket.emit("tcp-connection", { connId });
 
-      // Forward User -> Client
       userSocket.on("data", (data) => {
         socket.emit(`tcp-data-${connId}`, data);
       });
 
-      // Handle Client -> User (via WS)
       const dataHandler = ({ connId: id, data }) => {
         if (id === connId && !userSocket.destroyed) userSocket.write(data);
       };
@@ -114,19 +116,29 @@ io.on("connection", (socket) => {
       userSocket.on("error", () => userSocket.end());
     });
 
-    tcpServer.listen(publicPort, () => {
-      logger.info(`Tunnel created: :${publicPort} -> Client ${socket.id}`);
-      
-      tunnels[socket.id] = { publicPort, tcpServer };
-      
-      // Send Public URL to Client
-      const publicHost = "localhost"; // Ideally dynamic
-      socket.emit("tunnel-created", { 
-        url: `http://${publicHost}:${publicPort}`,
-        rawUrl: `${publicHost}:${publicPort}`,
-        tunnelId: socket.id 
+    try {
+      tcpServer.listen(publicPort, () => {
+        logger.info(`Tunnel created: :${publicPort} -> Client ${socket.id}`);
+        
+        tunnels[socket.id] = { publicPort, tcpServer };
+        
+        const publicHost = "localhost"; // In prod, this should be the server IP/domain
+        socket.emit("tunnel-created", { 
+          url: `http://${publicHost}:${publicPort}`,
+          rawUrl: `${publicHost}:${publicPort}`,
+          tunnelId: socket.id 
+        });
       });
-    });
+      
+      tcpServer.on('error', (err) => {
+         logger.error(`Failed to bind port ${publicPort}: ${err.message}`);
+         socket.emit("tunnel-failed", { message: `Failed to bind port ${publicPort}` });
+      });
+
+    } catch (err) {
+       logger.error(`Server listen error: ${err.message}`);
+       socket.emit("tunnel-failed", { message: "Internal Server Error" });
+    }
   });
 
   socket.on("disconnect", () => {
