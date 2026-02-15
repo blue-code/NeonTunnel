@@ -82,16 +82,16 @@ const app = (req, res) => {
   }
 };
 
-// --- 3. Greenlock Setup (Auto SSL - Robust V2 Config) ---
+// --- 3. Greenlock Setup (Auto SSL - Maximum Compatibility Mode) ---
 function startServers() {
   // Start Socket.IO Control Server
   controlServer.listen(CONTROL_PORT, () => {
     logger.info(`🎮 Control Server: :${CONTROL_PORT}`);
   });
 
-  // Start Greenlock (v2 style - most stable API)
+  // Start Greenlock (Try both .init and .create patterns)
   try {
-    const glx = greenlock.create({
+    const glx = (greenlock.create || greenlock.init)({
         version: 'draft-11',
         server: 'https://acme-v02.api.letsencrypt.org/directory',
         email: EMAIL,
@@ -104,7 +104,6 @@ function startServers() {
                 opts.email = EMAIL;
                 opts.agreeTos = true;
             }
-            // Auto-approve ANY domain ending with our base domain
             if (opts.domain && opts.domain.endsWith(DOMAIN)) {
                 cb(null, { options: opts, certs: certs });
             } else {
@@ -113,10 +112,10 @@ function startServers() {
         }
     });
 
-    // Handle HTTP/HTTPS using the v2 API pattern
-    // v2 uses glx.httpsServer(null, app)
-    const httpsServer = glx.httpsServer(null, app);
-    const httpServer = glx.httpServer();
+    // Handle HTTP/HTTPS
+    // Some versions return the server directly, others return a glx object
+    const httpsServer = (glx.httpsServer && glx.httpsServer(null, app)) || https.createServer(glx.httpsOptions, app);
+    const httpServer = (glx.httpServer && glx.httpServer()) || http.createServer(glx.middleware(app));
     
     httpServer.listen(80, () => logger.info("🌐 HTTP Server (ACME Challenge) running on port 80"));
     httpsServer.listen(443, () => logger.info("🔒 HTTPS Server running on port 443"));
