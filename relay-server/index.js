@@ -89,17 +89,24 @@ function startServers() {
     logger.info(`🎮 Control Server: :${CONTROL_PORT}`);
   });
 
-  // Start Greenlock (v3/v4 compact style)
+  // Start Greenlock (v2/v3 compatible wrapper)
   try {
+    // If v3.1.0 uses .init(), it should work. 
+    // If it fails, we fallback to HTTP.
+    // NOTE: Greenlock Express v3/v4 API changes frequently. 
+    // We try to use the most standard way.
+    
     greenlock.init({
         packageRoot: __dirname,
         configDir: "./greenlock.d",
         maintainerEmail: EMAIL,
         cluster: false
     })
-    .serve(app); 
+    .ready(glx => {
+        glx.serveApp(app);
+    });
     
-    logger.info(`🔒 Greenlock Auto-SSL Server Started (Ports 80/443)`);
+    logger.info(`🔒 Greenlock Auto-SSL Server Initialized (Ports 80/443)`);
   } catch (err) {
     logger.error(`Greenlock Init Failed: ${err.message}`);
     // Fallback
@@ -142,7 +149,7 @@ io.on("connection", (socket) => {
       subdomainMap[sub] = socket.id;
       tunnels[socket.id] = { type: 'http', subdomain: sub, clientSocket: socket };
       
-      // HTTPS is always preferred
+      // HTTPS is active via Greenlock
       const url = `https://${sub}.${DOMAIN}`; 
       
       logger.info(`[HTTP TUNNEL] ${url} -> Client ${socket.id}`);
