@@ -81,29 +81,19 @@ const app = (req, res) => {
   }
 };
 
-// --- 3. Greenlock Setup (Auto SSL) ---
+// --- 3. Server Setup (HTTP Only for Stability) ---
 function startServers() {
   // Start Socket.IO Control Server
   controlServer.listen(CONTROL_PORT, () => {
     logger.info(`🎮 Control Server: :${CONTROL_PORT}`);
   });
 
-  // Start Greenlock (v4)
-  try {
-    require("greenlock-express").init({
-        packageRoot: __dirname,
-        configDir: "./greenlock.d",
-        maintainerEmail: EMAIL,
-        cluster: false
-    })
-    .serve(app);
-    
-    logger.info(`🔒 Greenlock Auto-SSL Server Initialized (Ports 80/443)`);
-  } catch (err) {
-    logger.error(`Greenlock Init Failed: ${err.message}`);
-    // Fallback
-    http.createServer(app).listen(80, () => logger.warn("⚠️  Falling back to HTTP-only on port 80"));
-  }
+  // Start HTTP Proxy Server
+  // Note: HTTPS via Greenlock is temporarily disabled for stability.
+  // To enable SSL, use Nginx reverse proxy or load certs manually via fs.
+  http.createServer(app).listen(80, () => {
+    logger.info(`🌐 HTTP Proxy Server running on port 80`);
+  });
 }
 
 // --- 4. TCP Port Logic Helpers ---
