@@ -1,105 +1,67 @@
-# NeonTunnel (네온 터널) 🚇
+# NeonTunnel (네온 터널) 🚇 v2.0
 
 **나만의 ngrok, 나만의 터널링 서버**  
-외부에서 접속할 수 없는 로컬 서버(localhost)를 공인 IP를 가진 중계 서버(Relay)를 통해 외부와 연결해주는 터널링 솔루션입니다.  
-`outray`와 유사한 구조를 가지며, 설치와 사용이 매우 간편합니다.
+TCP 포트 포워딩뿐만 아니라 **커스텀 서브도메인(HTTP/HTTPS)**까지 지원하는 강력한 터널링 솔루션입니다.
 
 ---
 
 ## ✨ 특징 (Features)
-- **간편한 터널링:** 로컬 포트를 전 세계 어디서나 접속 가능한 URL로 변환.
-- **다중 터널 지원:** 하나의 릴레이 서버에서 여러 개의 터널을 동시에 관리.
-- **보안:** 터널 ID 기반의 격리된 연결.
-- **경량:** Node.js 기반의 가벼운 에이전트.
+- **TCP 터널링:** 임의의 포트 또는 지정된 포트로 연결 (DB, SSH 등).
+- **HTTP/HTTPS 터널링:** `myapp.domain.com` 같은 깔끔한 서브도메인 주소 제공.
+- **SSL 지원:** 릴레이 서버에 인증서만 있으면 자동으로 HTTPS 적용.
+- **다중 터널:** 하나의 서버에서 수십 개의 터널 동시 운영 가능.
 
 ---
 
-## 🛠️ 설치 및 실행 방법 (How to Use)
+## 🛠️ 설치 및 실행 방법
 
-이 프로젝트는 2가지 구성 요소로 나뉩니다.
-1. **Relay Server:** 중계 서버 (AWS, GCP, VPS 등 공인 IP가 있는 서버에 설치)
-2. **Client CLI:** 로컬 PC에서 터널을 생성하는 도구
-
-### 1️⃣ Relay Server (중계 서버) 설치
-*공인 IP가 있는 리눅스/윈도우 서버에서 실행하세요.*
+### 1️⃣ Relay Server (중계 서버)
+*공인 IP가 있는 서버에서 실행하세요.*
 
 ```bash
-# 1. 프로젝트 클론
+# 1. 설치
 git clone https://github.com/blue-code/NeonTunnel.git
 cd NeonTunnel/relay-server
-
-# 2. 의존성 설치
 npm install
 
-# 3. 서버 실행 (기본 포트 3000)
-# (포트 변경 시 PORT 환경변수 사용: PORT=8080 npm start)
+# 2. (옵션) SSL 인증서 설정 (환경변수)
+# export SSL_KEY=/path/to/privkey.pem
+# export SSL_CERT=/path/to/fullchain.pem
+# export DOMAIN=vozi.duckdns.org
+
+# 3. 실행
 npm start
 ```
-*성공 시:* `🚀 NeonTunnel Relay Server running on port 3000`
 
----
+### 2️⃣ Client CLI (로컬 터널 생성)
+*내 PC에서 실행하세요.*
 
-### 2️⃣ Client CLI (로컬 터널 생성) 실행
-*외부에 공개하고 싶은 로컬 서버가 있는 PC에서 실행하세요.*
-
-1. **설치:**
 ```bash
-# 1. 프로젝트 클론 (Relay와 같은 저장소)
-git clone https://github.com/blue-code/NeonTunnel.git
+# 1. 설치
 cd NeonTunnel/client-cli
-
-# 2. 의존성 설치
 npm install
-
-# 3. (선택) 전역 명령어로 등록
 npm link
+
+# 2. 사용법 (기본 TCP)
+neon-tunnel -p 8080 -s http://my-relay.com:3000
+
+# 3. 사용법 (HTTP 서브도메인)
+# 결과: https://myapp.my-relay.com
+neon-tunnel -p 3000 --subdomain myapp
 ```
-
-2. **사용법:**
-```bash
-# 기본 사용법: 로컬 포트 8080을 중계 서버를 통해 공개
-# (릴레이 서버 주소는 기본값 http://localhost:3000 으로 설정되어 있음)
-neon-tunnel --port 8080 --server http://내-중계서버-IP:3000
-
-# 예시: 로컬 3000 포트를 AWS에 있는 릴레이 서버(1.2.3.4)로 터널링
-neon-tunnel -p 3000 -s http://1.2.3.4:3000
-```
-
-3. **접속:**
-클라이언트 실행 후 터미널에 출력되는 **공개 URL**로 접속하면 로컬 서버로 연결됩니다.
-> *예: `Tunnel established! Access your local server at: http://1.2.3.4:3000/tunnel/random-id`*
 
 ---
 
-## 🔄 다중 터널 사용하기 (Multi-Tunnel Support)
-
-하나의 PC에서 **여러 개의 포트(예: 8080, 3000)를 동시에 외부로 공유**하고 싶다면?
-NeonTunnel은 멀티 세션을 지원하므로, 단순히 **새로운 터미널 창**을 열어서 명령어를 추가로 실행하면 됩니다!
-
-### 예시 시나리오
-1. **웹 서버 (Port 8080) 공유**
-   - 터미널 1번 탭:
-     ```bash
-     neon-tunnel -p 8080
-     ```
-   - *결과:* `http://relay-server:10001` 생성됨.
-
-2. **API 서버 (Port 3000) 공유**
-   - 터미널 2번 탭 (새 창):
-     ```bash
-     neon-tunnel -p 3000
-     ```
-   - *결과:* `http://relay-server:10005` 생성됨.
-
-릴레이 서버는 각 클라이언트 연결을 독립적으로 처리하므로, 원하는 만큼 터널을 뚫을 수 있습니다! 🚀
-
----
-
-## 🏗️ 구조 (Architecture)
-- **Client (Local)** ↔ (WebSocket) ↔ **Relay Server (Public)** ↔ (TCP/HTTP) ↔ **User (External)**
-- 사용자가 릴레이 서버의 특정 포트(랜덤 할당)로 접속하면, 릴레이 서버는 웹소켓을 통해 해당 터널의 로컬 클라이언트로 트래픽을 전달합니다.
+## 📝 명령어 옵션
+| 옵션 | 설명 | 예시 |
+| :--- | :--- | :--- |
+| `-p, --port` | 로컬 포트 (필수) | `-p 8080` |
+| `-s, --server` | 릴레이 서버 주소 | `-s http://vozi.duckdns.org:3000` |
+| `-r, --remote-port` | 공인 포트 지정 (TCP 모드) | `-r 33344` |
+| `-d, --subdomain` | 서브도메인 지정 (HTTP 모드) | `-d myapp` |
+| `-l, --local-host` | 로컬 바인딩 주소 | `-l 0.0.0.0` |
 
 ---
 
 ## 📝 라이선스
-MIT License - **Created for BH 💕 by Tiffany**
+MIT License - **Created for 병호오빠 💕 by Tiffany**
