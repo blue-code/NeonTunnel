@@ -1,17 +1,17 @@
 const { Server } = require("socket.io");
 const http = require("http");
-const https = require("https");
+const https = require("https"); // Required for types/compatibility, but Greenlock handles listening
 const net = require("net");
 const fs = require("fs");
 const winston = require("winston");
 const { v4: uuidv4 } = require("uuid");
+const greenlock = require("greenlock-express");
 
 // --- Configuration ---
 const DOMAIN = process.env.DOMAIN || "vozi.duckdns.org";
-const CONTROL_PORT = process.env.PORT || 3000;  // Socket.IO
-const HTTP_PORT = process.env.HTTP_PORT || 80;  // Public HTTP
-const HTTPS_PORT = process.env.HTTPS_PORT || 443; // Public HTTPS
-const MIN_PORT = 33000; // TCP Port Range
+const EMAIL = process.env.EMAIL || "rockus@daum.net"; // Replace with real email
+const CONTROL_PORT = process.env.PORT || 3000;
+const MIN_PORT = 33000; 
 const MAX_PORT = 39000;
 
 // Logger
@@ -24,18 +24,6 @@ const logger = winston.createLogger({
   transports: [new winston.transports.Console()],
 });
 
-// SSL Options
-const sslOptions = {};
-try {
-  if (process.env.SSL_KEY && process.env.SSL_CERT) {
-    sslOptions.key = fs.readFileSync(process.env.SSL_KEY);
-    sslOptions.cert = fs.readFileSync(process.env.SSL_CERT);
-    logger.info("✅ SSL Certificate Loaded");
-  }
-} catch (e) {
-  logger.warn("⚠️ SSL Certificate load failed. HTTPS will not be available.");
-}
-
 // State
 const tunnels = {};     // { socketId: { type, port?, subdomain?, server? } }
 const subdomainMap = {}; // { subdomain: socketId }
@@ -47,8 +35,8 @@ const controlServer = http.createServer((req, res) => {
 });
 const io = new Server(controlServer, { cors: { origin: "*" }, maxHttpBufferSize: 1e8 });
 
-// --- 2. HTTP/HTTPS Proxy Logic ---
-const handleHttpRequest = (req, res) => {
+// --- 2. HTTP/HTTPS Proxy Logic (Express-like Handler) ---
+const app = (req, res) => {
   const host = req.headers.host;
   if (!host) return res.end();
 
@@ -59,7 +47,6 @@ const handleHttpRequest = (req, res) => {
     const clientSocket = tunnels[socketId].clientSocket;
     const reqId = uuidv4();
 
-    // Send Request Header
     clientSocket.emit("http-request", {
       id: reqId,
       method: req.method,
@@ -67,11 +54,9 @@ const handleHttpRequest = (req, res) => {
       headers: req.headers
     });
 
-    // Stream Request Body
     req.on("data", (chunk) => clientSocket.emit(`http-req-body-${reqId}`, chunk));
     req.on("end", () => clientSocket.emit(`http-req-end-${reqId}`));
 
-    // Handle Response
     const headHandler = ({ statusCode, headers }) => res.writeHead(statusCode, headers);
     const bodyHandler = (chunk) => res.write(chunk);
     const endHandler = () => {
@@ -89,7 +74,6 @@ const handleHttpRequest = (req, res) => {
     clientSocket.on(`http-res-body-${reqId}`, bodyHandler);
     clientSocket.on(`http-res-end-${reqId}`, endHandler);
 
-    // Timeout / Error cleanup
     req.on("close", cleanupListeners);
 
   } else {
@@ -98,13 +82,34 @@ const handleHttpRequest = (req, res) => {
   }
 };
 
-const proxyHttp = http.createServer(handleHttpRequest);
-let proxyHttps = null;
-if (sslOptions.key) {
-  proxyHttps = https.createServer(sslOptions, handleHttpRequest);
+// --- 3. Greenlock Setup (Auto SSL) ---
+function startServers() {
+  // Start Socket.IO Control Server
+  controlServer.listen(CONTROL_PORT, () => {
+    logger.info(`🎮 Control Server: :${CONTROL_PORT}`);
+  });
+
+  // Start Greenlock (HTTP + HTTPS)
+  // Note: Greenlock v4 handles 80/443 binding automatically.
+  // It redirects HTTP -> HTTPS and provisions certs on demand.
+  try {
+    greenlock.init({
+        packageRoot: __dirname,
+        configDir: "./greenlock.d",
+        maintainerEmail: EMAIL,
+        cluster: false
+    })
+    .serve(app); // 'app' is our proxy handler function
+    
+    logger.info(`🔒 Greenlock Auto-SSL Server Started (Ports 80/443)`);
+  } catch (err) {
+    logger.error(`Greenlock Init Failed: ${err.message}`);
+    // Fallback to HTTP only if Greenlock fails (e.g. no root permission)
+    http.createServer(app).listen(80, () => logger.warn("⚠️  Falling back to HTTP-only on port 80"));
+  }
 }
 
-// --- 3. TCP Port Logic Helpers ---
+// --- 4. TCP Port Logic Helpers ---
 function isPortFree(port) {
   return new Promise((resolve) => {
     const server = net.createServer();
@@ -124,7 +129,7 @@ function getFreePort() {
   });
 }
 
-// --- 4. Main Socket Logic ---
+// --- 5. Main Socket Logic ---
 io.on("connection", (socket) => {
   logger.info(`Client connected: ${socket.id}`);
 
@@ -139,18 +144,17 @@ io.on("connection", (socket) => {
       subdomainMap[sub] = socket.id;
       tunnels[socket.id] = { type: 'http', subdomain: sub, clientSocket: socket };
       
-      const protocol = sslOptions.key ? "https" : "http";
-      // Assuming DNS points *.vozi.duckdns.org to this server IP
-      const url = `${protocol}://${sub}.${DOMAIN}`; 
+      // Assume HTTPS is active via Greenlock
+      const url = `https://${sub}.${DOMAIN}`; 
       
       logger.info(`[HTTP TUNNEL] ${url} -> Client ${socket.id}`);
       socket.emit("tunnel-created", { mode: 'http', url });
       return;
     }
 
-    // B. TCP Port Mode (Legacy / Raw TCP)
+    // B. TCP Port Mode
     let publicPort;
-    const requestedPort = (typeof options === 'object') ? options.port : options; // Backward compat
+    const requestedPort = (typeof options === 'object') ? options.port : options;
     const reqPortInt = requestedPort ? parseInt(requestedPort) : null;
 
     try {
@@ -208,7 +212,5 @@ io.on("connection", (socket) => {
   });
 });
 
-// Start All Servers
-controlServer.listen(CONTROL_PORT, () => logger.info(`🎮 Control Server: :${CONTROL_PORT}`));
-proxyHttp.listen(HTTP_PORT, () => logger.info(`🌐 HTTP Proxy: :${HTTP_PORT}`));
-if (proxyHttps) proxyHttps.listen(HTTPS_PORT, () => logger.info(`🔒 HTTPS Proxy: :${HTTPS_PORT}`));
+// Init
+startServers();
