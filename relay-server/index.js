@@ -89,31 +89,30 @@ function startServers() {
     logger.info(`🎮 Control Server: :${CONTROL_PORT}`);
   });
 
-  // Start Greenlock (v4) with Dynamic Domain Approval
+  // Start Greenlock (v4 with v2/v3 style hooks)
   try {
-    const glx = greenlock.init({
+    greenlock.init({
         packageRoot: __dirname,
         configDir: "./greenlock.d",
         maintainerEmail: EMAIL,
-        cluster: false
-    });
-
-    // Custom Manager Logic for Dynamic Subdomains
-    // We override getOptions to dynamically approve any subdomain ending with our DOMAIN
-    const originalGetOptions = glx.manager.getOptions.bind(glx.manager);
-    glx.manager.getOptions = async function(opts) {
-        if (opts.servername && opts.servername.endsWith(DOMAIN)) {
-            return {
-                subject: opts.servername,
-                altnames: [opts.servername],
-                agreeToTerms: true,
-                subscriberEmail: EMAIL
-            };
+        cluster: false,
+        // This hook is key for dynamic subdomains
+        approveDomains: (opts, certs, cb) => {
+            if (certs) {
+                // opts.domains = certs.altnames;
+                cb(null, { options: opts, certs: certs });
+                return;
+            }
+            if (opts.domain.endsWith(DOMAIN)) {
+                opts.email = EMAIL;
+                opts.agreeTos = true;
+                cb(null, { options: opts, certs: certs });
+            } else {
+                cb(new Error("Invalid domain"));
+            }
         }
-        return originalGetOptions(opts);
-    };
-
-    glx.serve(app);
+    })
+    .serve(app);
     
     logger.info(`🔒 Greenlock Auto-SSL Server Initialized (Ports 80/443)`);
   } catch (err) {
