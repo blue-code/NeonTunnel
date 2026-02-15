@@ -82,7 +82,7 @@ const app = (req, res) => {
   }
 };
 
-// --- 3. Greenlock Setup (Auto SSL - Robust V4 Manager Hook) ---
+// --- 3. Greenlock Setup (Auto SSL - V2/V3 Style) ---
 function startServers() {
   // Start Socket.IO Control Server
   controlServer.listen(CONTROL_PORT, () => {
@@ -91,30 +91,43 @@ function startServers() {
 
   // Start Greenlock
   try {
-    const glx = greenlock.init({
-        packageRoot: __dirname,
-        configDir: "./greenlock.d",
-        maintainerEmail: EMAIL,
-        cluster: false
+    const glx = greenlock.create({
+        // Configuration
+        version: 'draft-11', // Let's Encrypt v2
+        server: 'https://acme-v02.api.letsencrypt.org/directory',
+        email: EMAIL,
+        agreeTos: true,
+        configDir: './greenlock.d',
+        
+        // On-demand Domain Approval
+        approveDomains: (opts, certs, cb) => {
+            if (certs) {
+                // opts.domains = certs.altnames;
+                cb(null, { options: opts, certs: certs });
+                return;
+            }
+            if (opts.domain && opts.domain.endsWith(DOMAIN)) {
+                opts.email = EMAIL;
+                opts.agreeTos = true;
+                cb(null, { options: opts, certs: certs });
+            } else {
+                cb(new Error(`Invalid domain: ${opts.domain}`));
+            }
+        },
+        
+        // Store & Challenges
+        store: require('greenlock-store-fs'),
+        challenges: { 'http-01': require('acme-http-01-standalone') }
     });
 
-    // Override Manager.find to handle dynamic subdomains
-    // This is the correct way in v4 to bypass static config
-    glx.manager.find = async function(opts) {
-        if (opts.servername && opts.servername.endsWith(DOMAIN)) {
-            return [{
-                subject: opts.servername,
-                altnames: [opts.servername],
-                renewAt: 1
-            }];
-        }
-        // If not matching our domain, return empty or default behavior
-        return [];
-    };
-
-    glx.serve(app);
+    // Handle HTTP/HTTPS
+    // Note: glx.httpsOptions might be empty initially, but middleware handles it
+    const httpsServer = https.createServer(glx.httpsOptions, glx.middleware(app));
+    const httpServer = http.createServer(glx.middleware(app));
     
-    logger.info(`🔒 Greenlock Auto-SSL Server Initialized (Ports 80/443)`);
+    httpServer.listen(80, () => logger.info("🌐 HTTP Server (ACME Challenge) running on port 80"));
+    httpsServer.listen(443, () => logger.info("🔒 HTTPS Server running on port 443"));
+
   } catch (err) {
     logger.error(`Greenlock Init Failed: ${err.message}`);
     // Fallback
