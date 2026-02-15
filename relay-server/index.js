@@ -5,6 +5,7 @@ const net = require("net");
 const fs = require("fs");
 const winston = require("winston");
 const { v4: uuidv4 } = require("uuid");
+const greenlock = require("greenlock-express");
 
 // --- Configuration ---
 const DOMAIN = process.env.DOMAIN || "vozi.duckdns.org";
@@ -81,19 +82,43 @@ const app = (req, res) => {
   }
 };
 
-// --- 3. Server Setup (HTTP Only for Stability) ---
+// --- 3. Greenlock Setup (Auto SSL) ---
 function startServers() {
   // Start Socket.IO Control Server
   controlServer.listen(CONTROL_PORT, () => {
     logger.info(`🎮 Control Server: :${CONTROL_PORT}`);
   });
 
-  // Start HTTP Proxy Server
-  // Note: HTTPS via Greenlock is temporarily disabled for stability.
-  // To enable SSL, use Nginx reverse proxy or load certs manually via fs.
-  http.createServer(app).listen(80, () => {
-    logger.info(`🌐 HTTP Proxy Server running on port 80`);
-  });
+  // Start Greenlock (v4) with Dynamic Domain Approval
+  try {
+    require("greenlock-express").init({
+        packageRoot: __dirname,
+        configDir: "./greenlock.d",
+        maintainerEmail: EMAIL,
+        cluster: false,
+        approveDomains: (opts, certs, cb) => {
+            if (certs) {
+                // opts.domains = certs.altnames;
+                cb(null, { options: opts, certs: certs });
+                return;
+            }
+            if (opts.domain.endsWith(DOMAIN)) {
+                opts.email = EMAIL;
+                opts.agreeTos = true;
+                cb(null, { options: opts, certs: certs });
+            } else {
+                cb(new Error("Invalid domain"));
+            }
+        }
+    })
+    .serve(app);
+    
+    logger.info(`🔒 Greenlock Auto-SSL Server Initialized (Ports 80/443)`);
+  } catch (err) {
+    logger.error(`Greenlock Init Failed: ${err.message}`);
+    // Fallback
+    http.createServer(app).listen(80, () => logger.warn("⚠️  Falling back to HTTP-only on port 80"));
+  }
 }
 
 // --- 4. TCP Port Logic Helpers ---
