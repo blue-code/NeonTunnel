@@ -1,8 +1,18 @@
 const { Server } = require("socket.io");
 const http = require("http");
+const https = require("https");
 const net = require("net");
+const fs = require("fs");
 const winston = require("winston");
 const { v4: uuidv4 } = require("uuid");
+
+// --- Configuration ---
+const DOMAIN = process.env.DOMAIN || "vozi.duckdns.org";
+const CONTROL_PORT = process.env.PORT || 3000;  // Socket.IO
+const HTTP_PORT = process.env.HTTP_PORT || 80;  // Public HTTP
+const HTTPS_PORT = process.env.HTTPS_PORT || 443; // Public HTTPS
+const MIN_PORT = 33000; // TCP Port Range
+const MAX_PORT = 39000;
 
 // Logger
 const logger = winston.createLogger({
@@ -14,39 +24,98 @@ const logger = winston.createLogger({
   transports: [new winston.transports.Console()],
 });
 
-const HTTP_PORT = process.env.PORT || 3000;
-const MIN_PORT = 33000;
-const MAX_PORT = 39000;
+// SSL Options
+const sslOptions = {};
+try {
+  if (process.env.SSL_KEY && process.env.SSL_CERT) {
+    sslOptions.key = fs.readFileSync(process.env.SSL_KEY);
+    sslOptions.cert = fs.readFileSync(process.env.SSL_CERT);
+    logger.info("✅ SSL Certificate Loaded");
+  }
+} catch (e) {
+  logger.warn("⚠️ SSL Certificate load failed. HTTPS will not be available.");
+}
 
-const httpServer = http.createServer((req, res) => {
+// State
+const tunnels = {};     // { socketId: { type, port?, subdomain?, server? } }
+const subdomainMap = {}; // { subdomain: socketId }
+
+// --- 1. Control Server (Socket.IO) ---
+const controlServer = http.createServer((req, res) => {
   res.writeHead(200);
-  res.end("NeonTunnel Relay Server Running");
+  res.end("NeonTunnel Control Server");
 });
+const io = new Server(controlServer, { cors: { origin: "*" }, maxHttpBufferSize: 1e8 });
 
-const io = new Server(httpServer, {
-  cors: { origin: "*" },
-  maxHttpBufferSize: 1e8
-});
+// --- 2. HTTP/HTTPS Proxy Logic ---
+const handleHttpRequest = (req, res) => {
+  const host = req.headers.host;
+  if (!host) return res.end();
 
-// Active Tunnels: { socketId: { publicPort, tcpServer } }
-const tunnels = {};
+  const subdomain = host.split('.')[0];
+  const socketId = subdomainMap[subdomain];
 
-// Helper: Check if port is free
+  if (socketId && tunnels[socketId]) {
+    const clientSocket = tunnels[socketId].clientSocket;
+    const reqId = uuidv4();
+
+    // Send Request Header
+    clientSocket.emit("http-request", {
+      id: reqId,
+      method: req.method,
+      url: req.url,
+      headers: req.headers
+    });
+
+    // Stream Request Body
+    req.on("data", (chunk) => clientSocket.emit(`http-req-body-${reqId}`, chunk));
+    req.on("end", () => clientSocket.emit(`http-req-end-${reqId}`));
+
+    // Handle Response
+    const headHandler = ({ statusCode, headers }) => res.writeHead(statusCode, headers);
+    const bodyHandler = (chunk) => res.write(chunk);
+    const endHandler = () => {
+      res.end();
+      cleanupListeners();
+    };
+
+    const cleanupListeners = () => {
+      clientSocket.off(`http-res-head-${reqId}`, headHandler);
+      clientSocket.off(`http-res-body-${reqId}`, bodyHandler);
+      clientSocket.off(`http-res-end-${reqId}`, endHandler);
+    };
+
+    clientSocket.on(`http-res-head-${reqId}`, headHandler);
+    clientSocket.on(`http-res-body-${reqId}`, bodyHandler);
+    clientSocket.on(`http-res-end-${reqId}`, endHandler);
+
+    // Timeout / Error cleanup
+    req.on("close", cleanupListeners);
+
+  } else {
+    res.writeHead(404);
+    res.end("Tunnel not found or inactive.");
+  }
+};
+
+const proxyHttp = http.createServer(handleHttpRequest);
+let proxyHttps = null;
+if (sslOptions.key) {
+  proxyHttps = https.createServer(sslOptions, handleHttpRequest);
+}
+
+// --- 3. TCP Port Logic Helpers ---
 function isPortFree(port) {
   return new Promise((resolve) => {
     const server = net.createServer();
-    server.once('error', (err) => resolve(false));
-    server.once('listening', () => {
-      server.close(() => resolve(true));
-    });
+    server.once('error', () => resolve(false));
+    server.once('listening', () => { server.close(() => resolve(true)); });
     server.listen(port);
   });
 }
 
-// Helper: Find free port
 function getFreePort() {
   return new Promise(async (resolve, reject) => {
-    // Try random ports
     for (let i = 0; i < 100; i++) {
       const port = Math.floor(Math.random() * (MAX_PORT - MIN_PORT + 1)) + MIN_PORT;
       if (await isPortFree(port)) return resolve(port);
@@ -55,58 +124,57 @@ function getFreePort() {
   });
 }
 
+// --- 4. Main Socket Logic ---
 io.on("connection", (socket) => {
   logger.info(`Client connected: ${socket.id}`);
 
-  socket.on("register-tunnel", async (requestedPort) => {
+  socket.on("register-tunnel", async (options) => {
+    // A. Subdomain Mode (HTTP/HTTPS)
+    if (options && options.subdomain) {
+      const sub = options.subdomain.toLowerCase();
+      if (subdomainMap[sub]) {
+        return socket.emit("tunnel-failed", { message: `Subdomain '${sub}' is taken.` });
+      }
+      
+      subdomainMap[sub] = socket.id;
+      tunnels[socket.id] = { type: 'http', subdomain: sub, clientSocket: socket };
+      
+      const protocol = sslOptions.key ? "https" : "http";
+      // Assuming DNS points *.vozi.duckdns.org to this server IP
+      const url = `${protocol}://${sub}.${DOMAIN}`; 
+      
+      logger.info(`[HTTP TUNNEL] ${url} -> Client ${socket.id}`);
+      socket.emit("tunnel-created", { mode: 'http', url });
+      return;
+    }
+
+    // B. TCP Port Mode (Legacy / Raw TCP)
     let publicPort;
-    
-    // Explicitly parse and validate
+    const requestedPort = (typeof options === 'object') ? options.port : options; // Backward compat
     const reqPortInt = requestedPort ? parseInt(requestedPort) : null;
-    
-    logger.info(`[REQUEST] Client ${socket.id} requested port: ${requestedPort} (Parsed: ${reqPortInt})`);
 
     try {
       if (reqPortInt && !isNaN(reqPortInt)) {
-        // CASE 1: Requested specific port
         if (reqPortInt < MIN_PORT || reqPortInt > MAX_PORT) {
-          logger.warn(`[FAIL] Port ${reqPortInt} out of range (${MIN_PORT}-${MAX_PORT})`);
-          return socket.emit("tunnel-failed", { message: `Requested port ${reqPortInt} is out of allowed range (${MIN_PORT}-${MAX_PORT})` });
+          return socket.emit("tunnel-failed", { message: `Port out of range (${MIN_PORT}-${MAX_PORT})` });
         }
-        
         if (await isPortFree(reqPortInt)) {
           publicPort = reqPortInt;
-          logger.info(`[SUCCESS] Port ${publicPort} is available.`);
         } else {
-          logger.warn(`[FAIL] Port ${reqPortInt} is busy`);
-          return socket.emit("tunnel-failed", { message: `Requested port ${reqPortInt} is already in use` });
+          return socket.emit("tunnel-failed", { message: `Port ${reqPortInt} is busy` });
         }
       } else {
-        // CASE 2: Auto allocation
-        logger.info(`[AUTO] Assigning random port...`);
         publicPort = await getFreePort();
       }
-      
-      // Create TCP Server for this tunnel
+
       const tcpServer = net.createServer((userSocket) => {
         const connId = uuidv4();
-        
-        // Notify Client of new connection
         socket.emit("tcp-connection", { connId });
 
-        // Forward User -> Client
-        userSocket.on("data", (data) => {
-          socket.emit(`tcp-data-${connId}`, data);
-        });
-
-        // Handle Client -> User (via WS)
-        const dataHandler = ({ connId: id, data }) => {
-          if (id === connId && !userSocket.destroyed) userSocket.write(data);
-        };
+        userSocket.on("data", (data) => socket.emit(`tcp-data-${connId}`, data));
         
-        const closeHandler = ({ connId: id }) => {
-          if (id === connId) userSocket.end();
-        };
+        const dataHandler = ({ connId: id, data }) => { if (id === connId && !userSocket.destroyed) userSocket.write(data); };
+        const closeHandler = ({ connId: id }) => { if (id === connId) userSocket.end(); };
 
         socket.on("tcp-data", dataHandler);
         socket.on("tcp-close", closeHandler);
@@ -116,42 +184,31 @@ io.on("connection", (socket) => {
           socket.off("tcp-data", dataHandler);
           socket.off("tcp-close", closeHandler);
         });
-
         userSocket.on("error", () => userSocket.end());
       });
 
       tcpServer.listen(publicPort, () => {
-        logger.info(`[TUNNEL START] :${publicPort} -> Client ${socket.id}`);
-        
-        tunnels[socket.id] = { publicPort, tcpServer };
-        
-        // Send just the port, let client construct the URL
-        socket.emit("tunnel-created", { 
-          publicPort: publicPort,
-          tunnelId: socket.id 
-        });
-      });
-      
-      tcpServer.on('error', (err) => {
-         logger.error(`[TCP ERROR] Failed to bind port ${publicPort}: ${err.message}`);
-         socket.emit("tunnel-failed", { message: `Failed to bind port ${publicPort}` });
+        logger.info(`[TCP TUNNEL] :${publicPort} -> Client ${socket.id}`);
+        tunnels[socket.id] = { type: 'tcp', publicPort, tcpServer };
+        socket.emit("tunnel-created", { mode: 'tcp', publicPort });
       });
 
     } catch (err) {
-       logger.error(`[INTERNAL ERROR] ${err.message}`);
-       socket.emit("tunnel-failed", { message: "Internal Server Error" });
+      socket.emit("tunnel-failed", { message: err.message });
     }
   });
 
   socket.on("disconnect", () => {
-    logger.info(`Client disconnected: ${socket.id}`);
-    if (tunnels[socket.id]) {
-      tunnels[socket.id].tcpServer.close();
+    const tunnel = tunnels[socket.id];
+    if (tunnel) {
+      if (tunnel.type === 'http') delete subdomainMap[tunnel.subdomain];
+      if (tunnel.type === 'tcp' && tunnel.tcpServer) tunnel.tcpServer.close();
       delete tunnels[socket.id];
     }
   });
 });
 
-httpServer.listen(HTTP_PORT, () => {
-  logger.info(`🚀 NeonTunnel Relay Control Server running on port ${HTTP_PORT}`);
-});
+// Start All Servers
+controlServer.listen(CONTROL_PORT, () => logger.info(`🎮 Control Server: :${CONTROL_PORT}`));
+proxyHttp.listen(HTTP_PORT, () => logger.info(`🌐 HTTP Proxy: :${HTTP_PORT}`));
+if (proxyHttps) proxyHttps.listen(HTTPS_PORT, () => logger.info(`🔒 HTTPS Proxy: :${HTTPS_PORT}`));

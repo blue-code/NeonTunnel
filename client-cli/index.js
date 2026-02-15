@@ -2,6 +2,7 @@
 
 const io = require("socket.io-client");
 const net = require("net");
+const http = require("http");
 const yargs = require("yargs/yargs");
 const { hideBin } = require("yargs/helpers");
 
@@ -27,50 +28,54 @@ const argv = yargs(hideBin(process.argv))
   .option("remote-port", {
     alias: "r",
     type: "number",
-    description: "Specific public port to request on Relay",
+    description: "Specific public port to request (TCP Mode)",
+  })
+  .option("subdomain", {
+    alias: "d",
+    type: "string",
+    description: "Subdomain to request (HTTP Mode)",
   })
   .argv;
 
 const LOCAL_PORT = argv.port;
 const LOCAL_HOST = argv.localHost;
 const RELAY_SERVER = argv.server;
-// Support both camelCase and kebab-case access just in case
-const REQUESTED_PORT = argv.remotePort || argv['remote-port'];
+const REMOTE_PORT = argv.remotePort || argv['remote-port'];
+const SUBDOMAIN = argv.subdomain;
 
 console.log(`\n=== NeonTunnel Client ===`);
 console.log(`Target: ${LOCAL_HOST}:${LOCAL_PORT}`);
 console.log(`Relay : ${RELAY_SERVER}`);
-if (REQUESTED_PORT) console.log(`Request Public Port: ${REQUESTED_PORT}`);
+if (SUBDOMAIN) console.log(`Mode  : HTTP (Subdomain: ${SUBDOMAIN})`);
+else if (REMOTE_PORT) console.log(`Mode  : TCP (Port: ${REMOTE_PORT})`);
+else console.log(`Mode  : TCP (Random Port)`);
 console.log(`=========================\n`);
 
 const socket = io(RELAY_SERVER);
 
 socket.on("connect", () => {
   console.log("✅ Connected to Relay Server");
-  // Always send the port request if it exists
-  if (REQUESTED_PORT) {
-    console.log(`[Debug] Requesting specific port: ${REQUESTED_PORT}`);
-    socket.emit("register-tunnel", REQUESTED_PORT);
+  
+  if (SUBDOMAIN) {
+    socket.emit("register-tunnel", { subdomain: SUBDOMAIN });
   } else {
-    console.log(`[Debug] Requesting random port`);
-    socket.emit("register-tunnel");
+    // Legacy support: send port as first arg or object
+    socket.emit("register-tunnel", REMOTE_PORT);
   }
 });
 
-socket.on("tunnel-created", ({ publicPort, tunnelId }) => {
-  // Construct the public URL using the Relay Server hostname we connected to
-  let publicHost = "localhost";
-  try {
-    const relayUrl = new URL(RELAY_SERVER);
-    publicHost = relayUrl.hostname;
-  } catch (e) {}
-
-  // Handle case where server might still send 'url' (legacy) or 'publicPort'
-  const finalPort = publicPort; 
-  const fullUrl = `http://${publicHost}:${finalPort}`;
-
+socket.on("tunnel-created", ({ mode, url, publicPort, tunnelId }) => {
   console.log(`\n🎉 Tunnel Established!`);
-  console.log(`🌍 Public URL: ${fullUrl}`);
+  
+  if (mode === 'http') {
+    console.log(`🌍 Public URL: ${url}`);
+  } else {
+    // Construct TCP URL
+    let publicHost = "localhost";
+    try { publicHost = new URL(RELAY_SERVER).hostname; } catch (e) {}
+    console.log(`🌍 Public Address: ${publicHost}:${publicPort}`);
+  }
+  
   console.log(`🔑 Tunnel ID : ${tunnelId}\n`);
 });
 
@@ -79,43 +84,50 @@ socket.on("tunnel-failed", ({ message }) => {
   process.exit(1);
 });
 
-// --- TCP Stream Implementation ---
-
+// --- TCP Handler ---
 socket.on("tcp-connection", ({ connId }) => {
-  // New connection from outside to the Relay
   const local = new net.Socket();
-  
-  local.connect(LOCAL_PORT, LOCAL_HOST, () => {
-    // console.log(`[CONN] New connection ${connId} -> Local:${LOCAL_PORT}`);
-  });
+  local.connect(LOCAL_PORT, LOCAL_HOST, () => {});
 
-  local.on("data", (data) => {
-    socket.emit("tcp-data", { connId, data });
-  });
+  local.on("data", (data) => socket.emit("tcp-data", { connId, data }));
+  local.on("close", () => socket.emit("tcp-close", { connId }));
+  local.on("error", () => socket.emit("tcp-close", { connId }));
 
-  local.on("close", () => {
-    socket.emit("tcp-close", { connId });
-  });
-
-  local.on("error", (err) => {
-    // console.error(`[ERR] Local connection error: ${err.message}`);
-    socket.emit("tcp-close", { connId });
-  });
-
-  // Receive data from Relay for this connection
-  socket.on(`tcp-data-${connId}`, (data) => {
-    if (!local.destroyed) local.write(data);
-  });
-
-  socket.on(`tcp-close-${connId}`, () => {
-    local.end();
-  });
+  socket.on(`tcp-data-${connId}`, (data) => { if (!local.destroyed) local.write(data); });
+  socket.on(`tcp-close-${connId}`, () => local.end());
 });
 
-socket.on("error", (err) => {
-  console.error("❌ Socket Error:", err);
+// --- HTTP Handler ---
+socket.on("http-request", ({ id, method, url, headers }) => {
+  // Proxy HTTP request to local server
+  const options = {
+    hostname: LOCAL_HOST,
+    port: LOCAL_PORT,
+    path: url,
+    method: method,
+    headers: headers,
+  };
+
+  const req = http.request(options, (res) => {
+    socket.emit(`http-res-head-${id}`, {
+      statusCode: res.statusCode,
+      headers: res.headers,
+    });
+
+    res.on("data", (chunk) => socket.emit(`http-res-body-${id}`, chunk));
+    res.on("end", () => socket.emit(`http-res-end-${id}`));
+  });
+
+  req.on("error", (e) => {
+    // console.error(`Local Request Error: ${e.message}`);
+    socket.emit(`http-res-head-${id}`, { statusCode: 502 });
+    socket.emit(`http-res-end-${id}`);
+  });
+
+  // Stream body from Relay to Local
+  socket.on(`http-req-body-${id}`, (chunk) => req.write(chunk));
+  socket.on(`http-req-end-${id}`, () => req.end());
 });
 
-socket.on("disconnect", () => {
-  console.log("⚠️ Disconnected from Relay");
-});
+socket.on("error", (err) => console.error("❌ Socket Error:", err));
+socket.on("disconnect", () => console.log("⚠️ Disconnected from Relay"));
