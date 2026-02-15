@@ -1,6 +1,6 @@
 {
   "name": "neon-tunnel-relay",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -9,7 +9,7 @@
     "socket.io": "^4.7.4",
     "uuid": "^9.0.1",
     "winston": "^3.11.0",
-    "greenlock-express": "^4.0.4",
+    "greenlock-express": "^3.1.0",
     "greenlock-store-fs": "^3.2.2"
   }
 }
