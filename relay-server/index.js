@@ -82,7 +82,7 @@ const app = (req, res) => {
   }
 };
 
-// --- 3. Greenlock Setup (Auto SSL - On-demand Mode) ---
+// --- 3. Greenlock Setup (Auto SSL - Robust V4 Manager Hook) ---
 function startServers() {
   // Start Socket.IO Control Server
   controlServer.listen(CONTROL_PORT, () => {
@@ -98,28 +98,19 @@ function startServers() {
         cluster: false
     });
 
-    // Magic: Intercept getOptions to auto-approve ANY subdomain of our domain
-    // This bypasses the need for config.json entries
-    // Note: We need to handle the potential absence of manager or getOptions in some versions
-    if (glx.manager && typeof glx.manager.getOptions === 'function') {
-        const originalGetOptions = glx.manager.getOptions.bind(glx.manager);
-        
-        glx.manager.getOptions = async function(opts) {
-            // If the requested domain ends with our base domain, approve it!
-            if (opts.servername && opts.servername.endsWith(DOMAIN)) {
-                return {
-                    subject: opts.servername,
-                    altnames: [opts.servername],
-                    agreeToTerms: true,
-                    subscriberEmail: EMAIL,
-                    // Force HTTP-01 challenge (works for individual subdomains)
-                    challenges: { 'http-01': require('acme-http-01-standalone').create({}) }
-                };
-            }
-            // Fallback to default behavior
-            return originalGetOptions(opts);
-        };
-    }
+    // Override Manager.find to handle dynamic subdomains
+    // This is the correct way in v4 to bypass static config
+    glx.manager.find = async function(opts) {
+        if (opts.servername && opts.servername.endsWith(DOMAIN)) {
+            return [{
+                subject: opts.servername,
+                altnames: [opts.servername],
+                renewAt: 1
+            }];
+        }
+        // If not matching our domain, return empty or default behavior
+        return [];
+    };
 
     glx.serve(app);
     
