@@ -1,6 +1,6 @@
 const { Server } = require("socket.io");
 const http = require("http");
-const https = require("https"); // Required for types/compatibility, but Greenlock handles listening
+const https = require("https"); 
 const net = require("net");
 const fs = require("fs");
 const winston = require("winston");
@@ -9,7 +9,7 @@ const greenlock = require("greenlock-express");
 
 // --- Configuration ---
 const DOMAIN = process.env.DOMAIN || "vozi.duckdns.org";
-const EMAIL = process.env.EMAIL || "rockus@daum.net"; // Replace with real email
+const EMAIL = process.env.EMAIL || "rockus@daum.net"; 
 const CONTROL_PORT = process.env.PORT || 3000;
 const MIN_PORT = 33000; 
 const MAX_PORT = 39000;
@@ -25,8 +25,8 @@ const logger = winston.createLogger({
 });
 
 // State
-const tunnels = {};     // { socketId: { type, port?, subdomain?, server? } }
-const subdomainMap = {}; // { subdomain: socketId }
+const tunnels = {};     
+const subdomainMap = {}; 
 
 // --- 1. Control Server (Socket.IO) ---
 const controlServer = http.createServer((req, res) => {
@@ -89,9 +89,7 @@ function startServers() {
     logger.info(`🎮 Control Server: :${CONTROL_PORT}`);
   });
 
-  // Start Greenlock (HTTP + HTTPS)
-  // Note: Greenlock v4 handles 80/443 binding automatically.
-  // It redirects HTTP -> HTTPS and provisions certs on demand.
+  // Start Greenlock (v3/v4 compact style)
   try {
     greenlock.init({
         packageRoot: __dirname,
@@ -99,12 +97,12 @@ function startServers() {
         maintainerEmail: EMAIL,
         cluster: false
     })
-    .serve(app); // 'app' is our proxy handler function
+    .serve(app); 
     
     logger.info(`🔒 Greenlock Auto-SSL Server Started (Ports 80/443)`);
   } catch (err) {
     logger.error(`Greenlock Init Failed: ${err.message}`);
-    // Fallback to HTTP only if Greenlock fails (e.g. no root permission)
+    // Fallback
     http.createServer(app).listen(80, () => logger.warn("⚠️  Falling back to HTTP-only on port 80"));
   }
 }
@@ -144,7 +142,7 @@ io.on("connection", (socket) => {
       subdomainMap[sub] = socket.id;
       tunnels[socket.id] = { type: 'http', subdomain: sub, clientSocket: socket };
       
-      // Assume HTTPS is active via Greenlock
+      // HTTPS is always preferred
       const url = `https://${sub}.${DOMAIN}`; 
       
       logger.info(`[HTTP TUNNEL] ${url} -> Client ${socket.id}`);
