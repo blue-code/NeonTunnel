@@ -82,37 +82,46 @@ const app = (req, res) => {
   }
 };
 
-// --- 3. Greenlock Setup (Auto SSL) ---
+// --- 3. Greenlock Setup (Auto SSL - On-demand Mode) ---
 function startServers() {
   // Start Socket.IO Control Server
   controlServer.listen(CONTROL_PORT, () => {
     logger.info(`🎮 Control Server: :${CONTROL_PORT}`);
   });
 
-  // Start Greenlock (v4 with v2/v3 style hooks)
+  // Start Greenlock
   try {
-    greenlock.init({
+    const glx = greenlock.init({
         packageRoot: __dirname,
         configDir: "./greenlock.d",
         maintainerEmail: EMAIL,
-        cluster: false,
-        // This hook is key for dynamic subdomains
-        approveDomains: (opts, certs, cb) => {
-            if (certs) {
-                // opts.domains = certs.altnames;
-                cb(null, { options: opts, certs: certs });
-                return;
+        cluster: false
+    });
+
+    // Magic: Intercept getOptions to auto-approve ANY subdomain of our domain
+    // This bypasses the need for config.json entries
+    // Note: We need to handle the potential absence of manager or getOptions in some versions
+    if (glx.manager && typeof glx.manager.getOptions === 'function') {
+        const originalGetOptions = glx.manager.getOptions.bind(glx.manager);
+        
+        glx.manager.getOptions = async function(opts) {
+            // If the requested domain ends with our base domain, approve it!
+            if (opts.servername && opts.servername.endsWith(DOMAIN)) {
+                return {
+                    subject: opts.servername,
+                    altnames: [opts.servername],
+                    agreeToTerms: true,
+                    subscriberEmail: EMAIL,
+                    // Force HTTP-01 challenge (works for individual subdomains)
+                    challenges: { 'http-01': require('acme-http-01-standalone').create({}) }
+                };
             }
-            if (opts.domain.endsWith(DOMAIN)) {
-                opts.email = EMAIL;
-                opts.agreeTos = true;
-                cb(null, { options: opts, certs: certs });
-            } else {
-                cb(new Error("Invalid domain"));
-            }
-        }
-    })
-    .serve(app);
+            // Fallback to default behavior
+            return originalGetOptions(opts);
+        };
+    }
+
+    glx.serve(app);
     
     logger.info(`🔒 Greenlock Auto-SSL Server Initialized (Ports 80/443)`);
   } catch (err) {
