@@ -5,7 +5,6 @@ const net = require("net");
 const fs = require("fs");
 const winston = require("winston");
 const { v4: uuidv4 } = require("uuid");
-const greenlock = require("greenlock-express");
 
 // --- Configuration ---
 const DOMAIN = process.env.DOMAIN || "vozi.duckdns.org";
@@ -89,22 +88,15 @@ function startServers() {
     logger.info(`🎮 Control Server: :${CONTROL_PORT}`);
   });
 
-  // Start Greenlock (v2/v3 compatible wrapper)
+  // Start Greenlock (v4)
   try {
-    // If v3.1.0 uses .init(), it should work. 
-    // If it fails, we fallback to HTTP.
-    // NOTE: Greenlock Express v3/v4 API changes frequently. 
-    // We try to use the most standard way.
-    
-    greenlock.init({
+    require("greenlock-express").init({
         packageRoot: __dirname,
         configDir: "./greenlock.d",
         maintainerEmail: EMAIL,
         cluster: false
     })
-    .ready(glx => {
-        glx.serveApp(app);
-    });
+    .serve(app);
     
     logger.info(`🔒 Greenlock Auto-SSL Server Initialized (Ports 80/443)`);
   } catch (err) {
