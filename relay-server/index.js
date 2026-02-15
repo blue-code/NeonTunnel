@@ -82,48 +82,41 @@ const app = (req, res) => {
   }
 };
 
-// --- 3. Greenlock Setup (Auto SSL - V2/V3 Style) ---
+// --- 3. Greenlock Setup (Auto SSL - Robust V2 Config) ---
 function startServers() {
   // Start Socket.IO Control Server
   controlServer.listen(CONTROL_PORT, () => {
     logger.info(`🎮 Control Server: :${CONTROL_PORT}`);
   });
 
-  // Start Greenlock
+  // Start Greenlock (v2 style - most stable API)
   try {
     const glx = greenlock.create({
-        // Configuration
-        version: 'draft-11', // Let's Encrypt v2
+        version: 'draft-11',
         server: 'https://acme-v02.api.letsencrypt.org/directory',
         email: EMAIL,
         agreeTos: true,
         configDir: './greenlock.d',
-        
-        // On-demand Domain Approval
         approveDomains: (opts, certs, cb) => {
             if (certs) {
-                // opts.domains = certs.altnames;
-                cb(null, { options: opts, certs: certs });
-                return;
-            }
-            if (opts.domain && opts.domain.endsWith(DOMAIN)) {
+                opts.domains = certs.altnames;
+            } else {
                 opts.email = EMAIL;
                 opts.agreeTos = true;
+            }
+            // Auto-approve ANY domain ending with our base domain
+            if (opts.domain && opts.domain.endsWith(DOMAIN)) {
                 cb(null, { options: opts, certs: certs });
             } else {
-                cb(new Error(`Invalid domain: ${opts.domain}`));
+                cb(new Error("Invalid domain"));
             }
-        },
-        
-        // Store & Challenges
-        store: require('greenlock-store-fs'),
-        challenges: { 'http-01': require('acme-http-01-standalone') }
+        }
     });
 
-    // Handle HTTP/HTTPS
-    // Note: glx.httpsOptions might be empty initially, but middleware handles it
-    const httpsServer = https.createServer(glx.httpsOptions, glx.middleware(app));
-    const httpServer = http.createServer(glx.middleware(app));
+    // Handle HTTP/HTTPS using the v2 API pattern
+    // v2 uses glx.httpsServer(null, app)
+    const httpsServer = glx.httpsServer(null, app);
+    const httpServer = glx.httpServer();
     
     httpServer.listen(80, () => logger.info("🌐 HTTP Server (ACME Challenge) running on port 80"));
     httpsServer.listen(443, () => logger.info("🔒 HTTPS Server running on port 443"));
