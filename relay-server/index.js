@@ -1,16 +1,13 @@
 const { Server } = require("socket.io");
 const http = require("http");
-const https = require("https"); 
 const net = require("net");
-const fs = require("fs");
 const winston = require("winston");
 const { v4: uuidv4 } = require("uuid");
-const greenlock = require("greenlock-express");
 
 // --- Configuration ---
 const DOMAIN = process.env.DOMAIN || "vozi.duckdns.org";
-const EMAIL = process.env.EMAIL || "rockus@daum.net"; 
 const CONTROL_PORT = process.env.PORT || 3000;
+const HTTP_PORT = process.env.HTTP_PORT || 80;
 const MIN_PORT = 33000; 
 const MAX_PORT = 39000;
 
@@ -35,7 +32,7 @@ const controlServer = http.createServer((req, res) => {
 });
 const io = new Server(controlServer, { cors: { origin: "*" }, maxHttpBufferSize: 1e8 });
 
-// --- 2. HTTP/HTTPS Proxy Logic (Express-like Handler) ---
+// --- 2. HTTP Proxy Logic ---
 const app = (req, res) => {
   const host = req.headers.host;
   if (!host) return res.end();
@@ -82,49 +79,17 @@ const app = (req, res) => {
   }
 };
 
-// --- 3. Greenlock Setup (Auto SSL - Maximum Compatibility Mode) ---
+// --- 3. Server Setup (HTTP Only) ---
 function startServers() {
   // Start Socket.IO Control Server
   controlServer.listen(CONTROL_PORT, () => {
     logger.info(`🎮 Control Server: :${CONTROL_PORT}`);
   });
 
-  // Start Greenlock (Try both .init and .create patterns)
-  try {
-    const glx = (greenlock.create || greenlock.init)({
-        version: 'draft-11',
-        server: 'https://acme-v02.api.letsencrypt.org/directory',
-        email: EMAIL,
-        agreeTos: true,
-        configDir: './greenlock.d',
-        approveDomains: (opts, certs, cb) => {
-            if (certs) {
-                opts.domains = certs.altnames;
-            } else {
-                opts.email = EMAIL;
-                opts.agreeTos = true;
-            }
-            if (opts.domain && opts.domain.endsWith(DOMAIN)) {
-                cb(null, { options: opts, certs: certs });
-            } else {
-                cb(new Error("Invalid domain"));
-            }
-        }
-    });
-
-    // Handle HTTP/HTTPS
-    // Some versions return the server directly, others return a glx object
-    const httpsServer = (glx.httpsServer && glx.httpsServer(null, app)) || https.createServer(glx.httpsOptions, app);
-    const httpServer = (glx.httpServer && glx.httpServer()) || http.createServer(glx.middleware(app));
-    
-    httpServer.listen(80, () => logger.info("🌐 HTTP Server (ACME Challenge) running on port 80"));
-    httpsServer.listen(443, () => logger.info("🔒 HTTPS Server running on port 443"));
-
-  } catch (err) {
-    logger.error(`Greenlock Init Failed: ${err.message}`);
-    // Fallback
-    http.createServer(app).listen(80, () => logger.warn("⚠️  Falling back to HTTP-only on port 80"));
-  }
+  // Start HTTP Proxy Server
+  http.createServer(app).listen(HTTP_PORT, () => {
+    logger.info(`🌐 HTTP Proxy Server running on port ${HTTP_PORT}`);
+  });
 }
 
 // --- 4. TCP Port Logic Helpers ---
@@ -152,7 +117,7 @@ io.on("connection", (socket) => {
   logger.info(`Client connected: ${socket.id}`);
 
   socket.on("register-tunnel", async (options) => {
-    // A. Subdomain Mode (HTTP/HTTPS)
+    // A. Subdomain Mode (HTTP Only)
     if (options && options.subdomain) {
       const sub = options.subdomain.toLowerCase();
       if (subdomainMap[sub]) {
@@ -162,8 +127,7 @@ io.on("connection", (socket) => {
       subdomainMap[sub] = socket.id;
       tunnels[socket.id] = { type: 'http', subdomain: sub, clientSocket: socket };
       
-      // HTTPS is active via Greenlock
-      const url = `https://${sub}.${DOMAIN}`; 
+      const url = `http://${sub}.${DOMAIN}`; 
       
       logger.info(`[HTTP TUNNEL] ${url} -> Client ${socket.id}`);
       socket.emit("tunnel-created", { mode: 'http', url });
