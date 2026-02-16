@@ -1,6 +1,8 @@
 const { Server } = require("socket.io");
 const http = require("http");
 const net = require("net");
+const fs = require("fs");
+const path = require("path");
 const winston = require("winston");
 const { v4: uuidv4 } = require("uuid");
 
@@ -25,10 +27,18 @@ const logger = winston.createLogger({
 const tunnels = {};     
 const subdomainMap = {}; 
 
-// --- 1. Control Server (Socket.IO) ---
+// --- 1. Control Server (Socket.IO & Admin UI) ---
 const controlServer = http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end("NeonTunnel Control Server");
+  if (req.url === '/admin') {
+    fs.readFile(path.join(__dirname, 'public/admin.html'), (err, data) => {
+      if (err) { res.writeHead(500); res.end('Error loading dashboard'); return; }
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(data);
+    });
+  } else {
+    res.writeHead(200);
+    res.end("NeonTunnel Relay Server Running. Go to /admin for dashboard.");
+  }
 });
 const io = new Server(controlServer, { cors: { origin: "*" }, maxHttpBufferSize: 1e8 });
 
@@ -116,6 +126,32 @@ function getFreePort() {
 io.on("connection", (socket) => {
   logger.info(`Client connected: ${socket.id}`);
 
+  // Helper to broadcast update to admins
+  const broadcastUpdate = () => {
+    // Only send minimal info to admin to avoid circular JSON
+    const safeTunnels = {};
+    for(const [id, t] of Object.entries(tunnels)) {
+        safeTunnels[id] = { 
+            type: t.type, 
+            subdomain: t.subdomain, 
+            publicPort: t.publicPort 
+        };
+    }
+    io.to("admin-room").emit("admin-update", { tunnels: safeTunnels });
+  };
+
+  // Admin Events
+  socket.on("admin-join", () => {
+    socket.join("admin-room");
+    broadcastUpdate();
+  });
+
+  socket.on("admin-kill", (targetId) => {
+    logger.warn(`[ADMIN] Killing tunnel ${targetId}`);
+    const targetSocket = io.sockets.sockets.get(targetId);
+    if (targetSocket) targetSocket.disconnect(true);
+  });
+
   socket.on("register-tunnel", async (options) => {
     // A. Subdomain Mode (HTTP Only)
     if (options && options.subdomain) {
@@ -126,6 +162,7 @@ io.on("connection", (socket) => {
       
       subdomainMap[sub] = socket.id;
       tunnels[socket.id] = { type: 'http', subdomain: sub, clientSocket: socket };
+      broadcastUpdate();
       
       const url = `http://${sub}.${DOMAIN}`; 
       
@@ -177,6 +214,7 @@ io.on("connection", (socket) => {
         logger.info(`[TCP TUNNEL] :${publicPort} -> Client ${socket.id}`);
         tunnels[socket.id] = { type: 'tcp', publicPort, tcpServer };
         socket.emit("tunnel-created", { mode: 'tcp', publicPort });
+        broadcastUpdate();
       });
 
     } catch (err) {
@@ -190,6 +228,7 @@ io.on("connection", (socket) => {
       if (tunnel.type === 'http') delete subdomainMap[tunnel.subdomain];
       if (tunnel.type === 'tcp' && tunnel.tcpServer) tunnel.tcpServer.close();
       delete tunnels[socket.id];
+      broadcastUpdate();
     }
   });
 });
