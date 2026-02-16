@@ -1,19 +1,134 @@
-// ... (existing imports & config)
+const { Server } = require("socket.io");
+const http = require("http");
+const net = require("net");
+const fs = require("fs");
+const path = require("path");
+const winston = require("winston");
+const { v4: uuidv4 } = require("uuid");
 
-// ... (logger & state & control server)
+// --- Configuration ---
+const DOMAIN = process.env.DOMAIN || "vozi.duckdns.org";
+const CONTROL_PORT = process.env.PORT || 3000;
+const HTTP_PORT = process.env.HTTP_PORT || 80;
+const MIN_PORT = 33000; 
+const MAX_PORT = 39000;
 
-// ... (proxy app)
+// Logger
+const logger = winston.createLogger({
+  level: "info",
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.printf(({ timestamp, level, message }) => `${timestamp} [${level.toUpperCase()}]: ${message}`)
+  ),
+  transports: [new winston.transports.Console()],
+});
 
-// ... (startServers)
+// State
+const tunnels = {};     
+const subdomainMap = {}; 
+let io; // Declare globally
 
-// ... (port helpers)
+// --- 1. Control Server (Socket.IO & Admin UI) ---
+const controlServer = http.createServer((req, res) => {
+  if (req.url === '/admin') {
+    fs.readFile(path.join(__dirname, 'public/admin.html'), (err, data) => {
+      if (err) { res.writeHead(500); res.end('Error loading dashboard'); return; }
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(data);
+    });
+  } else {
+    res.writeHead(200);
+    res.end("NeonTunnel Relay Server Running. Go to /admin for dashboard.");
+  }
+});
+
+// Initialize Socket.IO immediately
+io = new Server(controlServer, { cors: { origin: "*" }, maxHttpBufferSize: 1e8 });
+
+// --- 2. HTTP Proxy Logic ---
+const app = (req, res) => {
+  const host = req.headers.host;
+  if (!host) return res.end();
+
+  const subdomain = host.split('.')[0];
+  const socketId = subdomainMap[subdomain];
+
+  if (socketId && tunnels[socketId]) {
+    const clientSocket = tunnels[socketId].clientSocket;
+    const reqId = uuidv4();
+
+    clientSocket.emit("http-request", {
+      id: reqId,
+      method: req.method,
+      url: req.url,
+      headers: req.headers
+    });
+
+    req.on("data", (chunk) => clientSocket.emit(`http-req-body-${reqId}`, chunk));
+    req.on("end", () => clientSocket.emit(`http-req-end-${reqId}`));
+
+    const headHandler = ({ statusCode, headers }) => res.writeHead(statusCode, headers);
+    const bodyHandler = (chunk) => res.write(chunk);
+    const endHandler = () => {
+      res.end();
+      cleanupListeners();
+    };
+
+    const cleanupListeners = () => {
+      clientSocket.off(`http-res-head-${reqId}`, headHandler);
+      clientSocket.off(`http-res-body-${reqId}`, bodyHandler);
+      clientSocket.off(`http-res-end-${reqId}`, endHandler);
+    };
+
+    clientSocket.on(`http-res-head-${reqId}`, headHandler);
+    clientSocket.on(`http-res-body-${reqId}`, bodyHandler);
+    clientSocket.on(`http-res-end-${reqId}`, endHandler);
+
+    req.on("close", cleanupListeners);
+
+  } else {
+    res.writeHead(404);
+    res.end("Tunnel not found or inactive.");
+  }
+};
+
+// --- 3. Server Setup (HTTP Only) ---
+function startServers() {
+  controlServer.listen(CONTROL_PORT, () => {
+    logger.info(`🎮 Control Server: :${CONTROL_PORT}`);
+  });
+
+  http.createServer(app).listen(HTTP_PORT, () => {
+    logger.info(`🌐 HTTP Proxy Server running on port ${HTTP_PORT}`);
+  });
+}
+
+// --- 4. TCP Port Logic Helpers ---
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => { server.close(() => resolve(true)); });
+    server.listen(port);
+  });
+}
+
+function getFreePort() {
+  return new Promise(async (resolve, reject) => {
+    for (let i = 0; i < 100; i++) {
+      const port = Math.floor(Math.random() * (MAX_PORT - MIN_PORT + 1)) + MIN_PORT;
+      if (await isPortFree(port)) return resolve(port);
+    }
+    reject("No free ports available");
+  });
+}
 
 // --- 5. Main Socket Logic ---
 io.on("connection", (socket) => {
   logger.info(`Client connected: ${socket.id}`);
 
-  // Broadcast function for Admin
   const broadcastUpdate = () => {
+    if (!io) return; // Safety check
     const safeTunnels = {};
     for(const [id, t] of Object.entries(tunnels)) {
         let endpoint = "";
@@ -64,7 +179,6 @@ io.on("connection", (socket) => {
       
       logger.info(`[HTTP TUNNEL] ${url} -> Client ${socket.id}`);
       
-      // Fix: Ensure tunnelId is explicitly passed
       socket.emit("tunnel-created", { 
           mode: 'http', 
           url: url,
@@ -118,7 +232,6 @@ io.on("connection", (socket) => {
         logger.info(`[TCP TUNNEL] :${publicPort} -> Client ${socket.id}`);
         tunnels[socket.id] = { type: 'tcp', publicPort, tcpServer };
         
-        // Fix: Ensure tunnelId is passed here too
         socket.emit("tunnel-created", { 
             mode: 'tcp', 
             publicPort: publicPort,
