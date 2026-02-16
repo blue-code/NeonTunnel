@@ -89,7 +89,7 @@ const app = (req, res) => {
   }
 };
 
-// --- 3. Server Setup (HTTP Only) ---
+// --- 3. Server Setup (HTTP Only - No Greenlock) ---
 function startServers() {
   // Start Socket.IO Control Server
   controlServer.listen(CONTROL_PORT, () => {
@@ -126,15 +126,15 @@ function getFreePort() {
 io.on("connection", (socket) => {
   logger.info(`Client connected: ${socket.id}`);
 
-  // Helper to broadcast update to admins
+  // Broadcast function for Admin
   const broadcastUpdate = () => {
-    // Only send minimal info to admin to avoid circular JSON
     const safeTunnels = {};
     for(const [id, t] of Object.entries(tunnels)) {
         safeTunnels[id] = { 
             type: t.type, 
             subdomain: t.subdomain, 
-            publicPort: t.publicPort 
+            publicPort: t.publicPort,
+            clientId: id
         };
     }
     io.to("admin-room").emit("admin-update", { tunnels: safeTunnels });
@@ -142,6 +142,7 @@ io.on("connection", (socket) => {
 
   // Admin Events
   socket.on("admin-join", () => {
+    logger.info(`Admin joined: ${socket.id}`);
     socket.join("admin-room");
     broadcastUpdate();
   });
@@ -154,7 +155,6 @@ io.on("connection", (socket) => {
 
   socket.on("admin-restart", () => {
     logger.warn(`[ADMIN] Server Restart Requested!`);
-    // PM2 will auto-restart if process exits
     process.exit(0);
   });
 
