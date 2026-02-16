@@ -152,6 +152,12 @@ io.on("connection", (socket) => {
     if (targetSocket) targetSocket.disconnect(true);
   });
 
+  socket.on("admin-restart", () => {
+    logger.warn(`[ADMIN] Server Restart Requested!`);
+    // PM2 will auto-restart if process exits
+    process.exit(0);
+  });
+
   socket.on("register-tunnel", async (options) => {
     // A. Subdomain Mode (HTTP Only)
     if (options && options.subdomain) {

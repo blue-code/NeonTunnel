@@ -46,6 +46,9 @@
             <h2>Server Status</h2>
             <p>Uptime: <span id="uptime">0</span>s</p>
             <p>Total Connections: <span id="total-conn">0</span></p>
+            <div style="margin-top: 15px;">
+                <button onclick="restartServer()" style="background: #e65100;">♻️ Restart Server</button>
+            </div>
         </div>
     </div>
 
@@ -53,48 +56,19 @@
     <script>
         const socket = io();
 
-        // Join Admin Room
-        socket.emit('admin-join', 'secret-admin-key'); // Simple auth for now
-
-        socket.on('admin-update', (data) => {
-            renderTunnels(data.tunnels);
-            document.getElementById('total-conn').innerText = Object.keys(data.tunnels).length;
-            document.getElementById('uptime').innerText = Math.floor(process.uptime()); // Note: process is node env, need server sent time
-        });
-
-        function renderTunnels(tunnels) {
-            const tbody = document.getElementById('tunnel-list');
-            tbody.innerHTML = '';
-            
-            if (Object.keys(tunnels).length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color: #888;">No active tunnels</td></tr>';
-                return;
-            }
-
-            for (const [id, info] of Object.entries(tunnels)) {
-                const tr = document.createElement('tr');
-                const typeBadge = info.type === 'http' 
-                    ? '<span class="badge badge-http">HTTP</span>' 
-                    : '<span class="badge badge-tcp">TCP</span>';
-                
-                const endpoint = info.type === 'http' 
-                    ? `https://${info.subdomain}.vozi.duckdns.org` 
-                    : `:${info.publicPort}`;
-
-                tr.innerHTML = `
-                    <td>${id.substring(0, 8)}...</td>
-                    <td>${typeBadge}</td>
-                    <td><a href="${endpoint}" target="_blank" style="color: #9cdcfe;">${endpoint}</a></td>
-                    <td class="status-active">Active</td>
-                    <td><button onclick="killTunnel('${id}')">Kill</button></td>
-                `;
-                tbody.appendChild(tr);
-            }
-        }
+        // ... existing code ...
 
         function killTunnel(id) {
             if(confirm('Disconnect this client?')) {
                 socket.emit('admin-kill', id);
+            }
+        }
+
+        function restartServer() {
+            if(confirm('Are you sure you want to RESTART the Relay Server? All tunnels will be disconnected.')) {
+                socket.emit('admin-restart');
+                alert('Server is restarting... Page will reload in 5 seconds.');
+                setTimeout(() => location.reload(), 5000);
             }
         }
     </script>
