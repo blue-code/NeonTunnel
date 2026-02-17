@@ -27,7 +27,7 @@ npm install
 # 2. (옵션) SSL 인증서 설정 (환경변수)
 # export SSL_KEY=/path/to/privkey.pem
 # export SSL_CERT=/path/to/fullchain.pem
-# export DOMAIN=vozi.duckdns.org
+# export DOMAIN=my-relay.com
 
 # 3. 실행
 npm start
@@ -56,7 +56,7 @@ neon-tunnel -p 3000 --subdomain myapp
 | 옵션 | 설명 | 예시 |
 | :--- | :--- | :--- |
 | `-p, --port` | 로컬 포트 (필수) | `-p 8080` |
-| `-s, --server` | 릴레이 서버 주소 | `-s http://vozi.duckdns.org:3000` |
+| `-s, --server` | 릴레이 서버 주소 | `-s http://my-relay.com:3000` |
 | `-r, --remote-port` | 공인 포트 지정 (TCP 모드) | `-r 33344` |
 | `-d, --subdomain` | 서브도메인 지정 (HTTP 모드) | `-d myapp` |
 | `-l, --local-host` | 로컬 바인딩 주소 | `-l 0.0.0.0` |
@@ -64,4 +64,4 @@ neon-tunnel -p 3000 --subdomain myapp
 ---
 
 ## 📝 라이선스
-MIT License - **Created for 병호오빠 💕 by Tiffany**
+MIT License - **Created for BH 💕 by Tiffany**
