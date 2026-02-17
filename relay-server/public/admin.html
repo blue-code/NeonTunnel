@@ -1,9 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚇 NeonTunnel Admin</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1e1e1e; color: #eee; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        h1 { color: #dcb67a; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        .card { background: #252526; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #333; }
+        th { color: #4ec9b0; font-weight: 600; }
+        .status-active { color: #4caf50; font-weight: bold; }
+        button { background: #d32f2f; color: white; border: none; padding: 6px 12px; cursor: pointer; border-radius: 4px; transition: background 0.2s; }
+        button:hover { background: #b71c1c; }
+        .btn-restart { background: #e65100; font-weight: bold; padding: 10px 20px; }
+        .btn-restart:hover { background: #ef6c00; }
+        
+        .badge { padding: 3px 8px; border-radius: 12px; font-size: 0.85em; font-weight: bold; border: 1px solid transparent; }
+        .badge-http { color: #569cd6; border-color: #569cd6; background: rgba(86, 156, 214, 0.1); }
+        .badge-tcp { color: #ce9178; border-color: #ce9178; background: rgba(206, 145, 120, 0.1); }
+        
+        a { color: #9cdcfe; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚇 NeonTunnel Dashboard</h1>
+        
+        <div class="card">
+            <h2>🌍 Active Tunnels</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Client ID</th>
+                        <th>Type</th>
+                        <th>Public Endpoint</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="tunnel-list">
+                    <tr><td colspan="5" style="text-align:center; color: #888; padding: 20px;">Connecting to server...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <h2>⚙️ Server Control</h2>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <p><strong>Uptime:</strong> <span id="uptime">0</span>s</p>
+                    <p><strong>Total Connections:</strong> <span id="total-conn">0</span></p>
+                </div>
+                <button onclick="restartServer()" class="btn-restart">♻️ Restart Server</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+
+        // Join Admin Room
+        socket.emit('admin-join');
+
+        socket.on('admin-update', (data) => {
+            renderTunnels(data.tunnels);
+            if (data.tunnels) {
+                document.getElementById('total-conn').innerText = Object.keys(data.tunnels).length;
+            }
+            // Uptime is client-side approx for now or add server event
+            // document.getElementById('uptime').innerText = ...
+        });
+
         function renderTunnels(tunnels) {
             const tbody = document.getElementById('tunnel-list');
             tbody.innerHTML = '';
             
             if (!tunnels || Object.keys(tunnels).length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color: #888;">No active tunnels</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color: #888; padding: 20px;">No active tunnels</td></tr>';
                 return;
             }
 
@@ -13,16 +91,42 @@
                     ? '<span class="badge badge-http">HTTP</span>' 
                     : '<span class="badge badge-tcp">TCP</span>';
                 
-                // Use pre-calculated endpoint from server or fallback
-                const endpoint = info.endpoint || (info.type === 'http' ? `http://${info.subdomain}.vozi.duckdns.org` : `:${info.publicPort}`);
+                // Construct URL
+                // Note: DOMAIN variable isn't available here directly, so we rely on info.endpoint from server
+                // or fallback to constructing it if server didn't send endpoint
+                let endpoint = info.endpoint;
+                if (!endpoint) {
+                     endpoint = info.type === 'http' 
+                        ? `http://${info.subdomain}.vozi.duckdns.org` 
+                        : `:${info.publicPort}`;
+                }
+
+                const link = info.type === 'http' ? `<a href="${endpoint}" target="_blank">${endpoint}</a>` : endpoint;
 
                 tr.innerHTML = `
-                    <td>${id.substring(0, 8)}...</td>
+                    <td title="${id}">${id.substring(0, 8)}...</td>
                     <td>${typeBadge}</td>
-                    <td><a href="${endpoint}" target="_blank" style="color: #9cdcfe;">${endpoint}</a></td>
-                    <td class="status-active">Active</td>
+                    <td>${link}</td>
+                    <td class="status-active">● Active</td>
                     <td><button onclick="killTunnel('${id}')">Kill</button></td>
                 `;
                 tbody.appendChild(tr);
             }
         }
+
+        function killTunnel(id) {
+            if(confirm('Are you sure you want to disconnect this client?')) {
+                socket.emit('admin-kill', id);
+            }
+        }
+
+        function restartServer() {
+            if(confirm('⚠️ WARNING: This will disconnect ALL active tunnels.\nAre you sure you want to RESTART the Relay Server?')) {
+                socket.emit('admin-restart');
+                alert('Server is restarting... This page will reload in 5 seconds.');
+                setTimeout(() => location.reload(), 5000);
+            }
+        }
+    </script>
+</body>
+</html>
