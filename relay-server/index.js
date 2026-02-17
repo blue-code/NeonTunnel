@@ -9,7 +9,7 @@ const { v4: uuidv4 } = require("uuid");
 // --- Configuration ---
 const DOMAIN = process.env.DOMAIN || "vozi.duckdns.org";
 const CONTROL_PORT = process.env.PORT || 3000;
-const HTTP_PORT = process.env.HTTP_PORT || 8080;
+const HTTP_PORT = process.env.HTTP_PORT || 80;
 const MIN_PORT = 33000; 
 const MAX_PORT = 39000;
 
