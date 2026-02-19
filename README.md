@@ -103,4 +103,4 @@ neon-tunnel -p 8000 -l 0.0.0.0 --subdomain dash --server http://내-서버-주�
 ---
 
 ## 📜 라이선스
-MIT License - **Created for 병호오빠 💕 by Tiffany**
+MIT License - **Created for BH 💕 by Tiffany**
